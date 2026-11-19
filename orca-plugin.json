@@ -1,0 +1,32 @@
+{
+  "manifestVersion": 2,
+  "id": "versionlens",
+  "name": "Version Lens",
+  "version": "0.1.0",
+  "description": "See newer npm versions for every package.json dependency, update them in place, read changelogs, and catch peer conflicts and known vulnerabilities.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "versionlens",
+        "title": "Version Lens",
+        "icon": "package",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    }
+  ]
+}
