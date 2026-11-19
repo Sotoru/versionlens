@@ -47,5 +47,9 @@ declare module 'orca' {
     'deps.update': { input: { updates: Update[] }; output: Report }
     /** Writes the changelog between two versions to a Markdown file and opens it in an editor tab. */
     'deps.openChangelog': { input: { name: string; from: string; to: string }; output: { path: string } }
+    /** Starts one agent to update every outdated dependency, linked ones together, majors last. */
+    'deps.askAgent': { output: { started: boolean; focused: boolean; sent: boolean } }
+    /** The same prompt, to paste into a chat: plugins can only open agents in a terminal. */
+    'deps.agentPrompt': { output: { prompt: string } }
   }
 }

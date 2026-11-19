@@ -5,12 +5,23 @@
   "version": "0.1.0",
   "description": "See newer npm versions for every package.json dependency, update them in place, read changelogs, and catch peer conflicts and known vulnerabilities.",
   "engines": {
-    "orca": ">=1.4.248"
+    "orca": ">=1.4.259"
   },
   "execution": "trusted-worker",
   "pluginApi": 1,
   "main": "src/worker.ts",
   "contributes": {
+    "settings": [
+      {
+        "key": "agent",
+        "title": "Agent for \"Update with agent\"",
+        "description": "Which agent CLI Orca starts to update the dependencies.",
+        "type": "string",
+        "default": "claude",
+        "enum": ["claude", "codex", "opencode", "gemini", "cursor", "copilot"],
+        "enumLabels": ["Claude Code", "Codex", "OpenCode", "Gemini CLI", "Cursor", "GitHub Copilot"]
+      }
+    ],
     "panels": [
       {
         "id": "versionlens",
@@ -27,6 +38,18 @@
     },
     {
       "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:launch"
+    },
+    {
+      "kind": "terminal:read"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "settings:own"
     }
   ]
 }

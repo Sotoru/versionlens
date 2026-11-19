@@ -3,6 +3,7 @@ import {
   atom,
   Badge,
   Box,
+  Button,
   Callout,
   EmptyState,
   Heading,
@@ -19,7 +20,9 @@ import {
   Tab,
   Tabs,
   Text,
+  Textarea,
   update,
+  type OrcaNode,
   type PanelContext
 } from 'orca'
 import { link, targetOf, type Filter, type Item, type Member, type Problem, type Target } from './links'
@@ -63,6 +66,39 @@ async function call(work: () => Promise<Report>, done?: string): Promise<void> {
 }
 
 const refresh = (fresh = false) => call(() => plugin.request('deps.check', { fresh }, { timeoutMs: 120000 }))
+
+/** "Update with agent": first press asks, the second starts it. */
+const confirmingAgent = atom(false)
+/** The prompt on screen for "Copy prompt"; null when hidden. */
+const shownPrompt = atom<string | null>(null)
+
+async function askAgent(): Promise<void> {
+  set(confirmingAgent, false)
+  set(failure, null)
+  set(notice, 'Starting an agent to update the dependencies…')
+  try {
+    // The worker waits for the agent to be ready before it types the prompt: allow it a minute.
+    const { focused, sent } = await plugin.request('deps.askAgent', undefined, { timeoutMs: 90000 })
+    const where = focused ? 'in the terminal tab Orca just opened' : 'in a new terminal tab of this workspace'
+    if (sent) set(notice, `An agent is updating the dependencies ${where}: patches first, linked packages together, majors last with their changelogs. Review its changes before you commit them.`)
+    else {
+      set(notice, null)
+      set(failure, { text: `The agent opened ${where}, but it did not get ready for the prompt within a minute (a login or trust screen?). Answer it, then press the button again.`, tone: 'warning' })
+    }
+  } catch (e) {
+    set(notice, null)
+    set(failure, { text: `Could not start an agent: ${(e as Error).message}`, tone: 'danger' })
+  }
+}
+
+async function showPrompt(): Promise<void> {
+  set(confirmingAgent, false)
+  try {
+    set(shownPrompt, (await plugin.request('deps.agentPrompt', undefined, { timeoutMs: 60000 })).prompt)
+  } catch (e) {
+    set(failure, { text: (e as Error).message, tone: 'warning' })
+  }
+}
 
 function apply(updates: Update[]): Promise<void> {
   if (updates.length === 0) return Promise.resolve()
@@ -192,7 +228,7 @@ const title = (item: Item) => (item.family ? capital(item.family) : item.hub.dep
 const kindNode = (kind: Target["kind"]) => (kind === "major" ? <Text size="xs" tone="warning">major</Text> : kind)
 
 /** Every row, single or group, has this one shape so they all stand the same height. */
-function RowShell({ name, detail, flag, actions }: { name: string; detail: unknown[]; flag: Flag; actions: unknown[] }) {
+function RowShell({ name, detail, flag, actions }: { name: string; detail: OrcaNode[]; flag: Flag; actions: OrcaNode[] }) {
   return (
     <Box direction="column" gap="xs" paddingX="sm" paddingY="sm">
       <Box direction="row" gap="xs" align="center">
@@ -372,8 +408,55 @@ export default function Panel() {
             {r?.path ? `${r.path.split('/').slice(-2).join('/')} · package.json` : 'package.json'}
           </Text>
         </Stack>
-        <IconButton icon="refresh" label="Refresh" tooltip="Check npm again" variant="ghost" disabled={working} onPress={() => refresh(true)} />
+        <Row gap="none">
+          {r && !r.error && rows.length ? (
+            <IconButton
+              icon="agent"
+              label="Update with agent"
+              tooltip="Update every library with an agent, respecting semver"
+              variant={read(confirmingAgent) ? 'solid' : 'ghost'}
+              disabled={working}
+              onPress={() => update(confirmingAgent, (v) => !v)}
+            />
+          ) : null}
+          <IconButton icon="refresh" label="Refresh" tooltip="Check npm again" variant="ghost" disabled={working} onPress={() => refresh(true)} />
+        </Row>
       </Row>
+      {read(confirmingAgent) ? (
+        <Callout tone="accent" icon="agent" title={`Update ${plural(rows.length, 'library', 'libraries')} with one agent?`}>
+          <Stack gap="sm">
+            <Text size="xs">
+              It fixes known vulnerabilities first, then applies patches, then minors, then majors one group at a time after reading their changelogs. Linked packages move together, ranges keep their ^ or ~, and it runs install, the type check and the tests after each step. Nothing is committed.
+            </Text>
+            <Row gap="xs" wrap>
+              <Button icon="agent" tone="accent" variant="solid" size="sm" onPress={askAgent}>
+                Start agent
+              </Button>
+              <Button icon="copy" variant="ghost" size="sm" onPress={showPrompt}>
+                Copy prompt for a chat
+              </Button>
+              <Button variant="ghost" size="sm" onPress={() => set(confirmingAgent, false)}>
+                Cancel
+              </Button>
+            </Row>
+          </Stack>
+        </Callout>
+      ) : null}
+      {read(shownPrompt) !== null ? (
+        <Callout tone="neutral" icon="copy" title="Prompt for a chat">
+          <Stack gap="sm">
+            <Text size="xs" muted>
+              Plugins can open agents only in a terminal. To use a chat, select this text, copy it with ⌘C and paste it there.
+            </Text>
+            <Textarea label="Prompt" labelHidden rows={8} value={read(shownPrompt)!} onChange={() => {}} />
+            <Row>
+              <Button variant="ghost" size="sm" onPress={() => set(shownPrompt, null)}>
+                Close
+              </Button>
+            </Row>
+          </Stack>
+        </Callout>
+      ) : null}
       {r && !r.error ? (
         <Tabs
           label="Filter"

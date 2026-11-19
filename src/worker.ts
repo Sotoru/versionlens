@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
+import { updatePrompt, PROMPT_MAX } from './agent'
 import { addVulnerabilities } from './osv'
 import type { Bump, Changelog, Dep, Release, Report, Status, Update } from './protocol'
 
@@ -233,6 +234,37 @@ export async function apply(dir: string, updates: Update[]): Promise<void> {
   await writeFile(join(dir, 'package.json'), JSON.stringify(pkg, null, indent) + (text.endsWith('\n') ? '\n' : ''))
 }
 
+/**
+ * Whether an agent's TUI is waiting for input. Each draws a prompt glyph at the start of its input
+ * box (`❯` Claude Code, `›` Codex, `>` others) once it has loaded; a trust or login screen does not.
+ */
+export function agentReady(lines: string[]): boolean {
+  const text = lines.join('\n')
+  if (/trust (this|the) (folder|files)|do you trust|log ?in to|sign in to|select (a )?login/i.test(text)) return false
+  return lines.some((l) => /^\s*[│|]?\s*[❯›>](\s|$)/.test(l))
+}
+
+type Wait = (ms: number) => Promise<void>
+const pause: Wait = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Orca's agent.launch can drop a prompt sent before the agent has registered
+ * (`agent_launch_terminal_not_running_agent`), so the worker types it once the TUI is ready.
+ */
+export async function deliverPrompt(
+  read: () => Promise<string[]>,
+  send: (text: string) => Promise<boolean>,
+  prompt: string,
+  { timeoutMs = 60_000, everyMs = 500, wait = pause }: { timeoutMs?: number; everyMs?: number; wait?: Wait } = {}
+): Promise<boolean> {
+  for (let waited = 0; waited <= timeoutMs; waited += everyMs) {
+    const lines = await read().catch(() => [] as string[])
+    if (agentReady(lines)) return send(prompt)
+    await wait(everyMs)
+  }
+  return false
+}
+
 export default function activate(orca: OrcaWorkerApi): void {
   // Cached for the worker's life so an update does not ask npm again; Refresh clears it.
   const cache = new Map<string, Promise<Info | null>>()
@@ -266,6 +298,32 @@ export default function activate(orca: OrcaWorkerApi): void {
     return run(signal)
   })
   orca.panels.handle('deps.update', async ({ updates }, { signal }) => run(signal, (dir) => apply(dir, updates)))
+  /** The prompt from the same check the panel shows, so the agent gets what the person sees. */
+  async function promptFor(signal: AbortSignal): Promise<{ id: string; prompt: string }> {
+    const ws = await workspace()
+    if (!('id' in ws)) throw Object.assign(new Error(ws.error), { code: 'unavailable' })
+    const report = await check(ws.path, signal, cached)
+    if (!report.deps.some((d) => d.status === 'major' || d.status === 'minor' || d.status === 'patch')) {
+      throw Object.assign(new Error('Everything is up to date.'), { code: 'invalid' })
+    }
+    return { id: ws.id, prompt: updatePrompt(report.deps).slice(0, PROMPT_MAX) }
+  }
+
+  orca.panels.handle('deps.agentPrompt', async (_input, { signal }) => ({ prompt: (await promptFor(signal)).prompt }))
+  orca.panels.handle('deps.askAgent', async (_input, { signal }) => {
+    const { id, prompt } = await promptFor(signal)
+    const ws = { id }
+    const agent = String((await orca.settings.get('agent')) ?? 'claude')
+    // No prompt here: Orca's own delivery can silently drop it (see deliverPrompt).
+    const { terminalId } = await orca.host.call('agent.launch', { workspaceId: ws.id, agent })
+    const { focused } = await orca.host.call('terminal.focus', { terminalId }).catch(() => ({ focused: false }))
+    const sent = await deliverPrompt(
+      async () => (await orca.host.call('terminal.read', { terminalId, maxLines: 60 })).lines,
+      async (text) => (await orca.host.call('terminal.sendText', { terminalId, text, enter: true })).accepted,
+      prompt
+    )
+    return { started: true, focused, sent }
+  })
   orca.panels.handle('deps.openChangelog', async ({ name, from, to }, { signal }) => {
     const ws = await workspace()
     if (!('id' in ws)) throw Object.assign(new Error(ws.error), { code: 'unavailable' })

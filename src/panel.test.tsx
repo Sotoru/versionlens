@@ -168,3 +168,31 @@ test('shows the worker error', async () => {
   assert.ok(view.find({ text: 'No workspace is focused.' }))
   await view.unmount()
 })
+
+test('Update with agent sits beside refresh, asks first, and offers the prompt for a chat', async () => {
+  let started = 0
+  const host = mockHost({
+    requests: {
+      'deps.check': { path: '/repo/app', deps: [react] },
+      'deps.askAgent': () => (started++, { started: true, focused: true, sent: true }),
+      'deps.agentPrompt': { prompt: 'Update the dependencies in package.json…' }
+    }
+  })
+  const view = await mount(panel, { host })
+  const btn = view.find({ label: 'Update with agent' })
+  assert.equal(btn?.props.icon, 'agent')
+  assert.equal(btn?.props.tooltip, 'Update every library with an agent, respecting semver')
+  await view.press({ label: 'Update with agent' })
+  assert.equal(started, 0, 'the first press only asks')
+  assert.ok(view.find({ label: 'Update 1 library with one agent?' }))
+  await view.press({ text: 'Copy prompt for a chat' })
+  assert.equal(view.valueOf({ label: 'Prompt' }), 'Update the dependencies in package.json…')
+  await view.press({ text: 'Close' })
+  await view.press({ label: 'Update with agent' })
+  await view.press({ text: 'Start agent' })
+  assert.equal(started, 1)
+  assert.ok(view.find({ text: /^An agent is updating the dependencies in the terminal tab Orca just opened/ }))
+  assert.deepEqual(view.refusals, [])
+  assert.deepEqual(view.warnings, [])
+  await view.unmount()
+})

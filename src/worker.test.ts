@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { assert, test } from 'orca/testing'
-import { apply, changelogPath, ownSections, check, githubRepo, pickReleases, rewrite, sectionsInRange, suggest, toMarkdown } from './worker'
+import { type Info, apply, changelogPath, ownSections, check, githubRepo, pickReleases, rewrite, sectionsInRange, suggest, toMarkdown } from './worker'
 
 test('cuts CHANGELOG.md to the versions in (from, to]', () => {
   const md = '# Changelog\n\n## [2.1.0] - 2026-01-02\n- new\n### Fixed\n- bug 2.0.9 mention\n\n## 2.0.0\n- old\n\n## v1.9.0\n- older\n'
@@ -68,11 +68,11 @@ test('reads the installed version and keeps only peers this package.json has', a
   await writeFile(join(dir, 'package.json'), JSON.stringify({ devDependencies: { addon: '^1.0.0', core: '^1.0.0' } }))
   await mkdir(join(dir, 'node_modules', 'addon'), { recursive: true })
   await writeFile(join(dir, 'node_modules', 'addon', 'package.json'), '{"version":"1.0.4"}')
-  const info = {
+  const info: Record<string, Info> = {
     addon: { latest: '1.1.0', versions: ['1.0.4', '1.1.0'], peers: { '1.1.0': { core: '^1.1.0', react: '*' } } },
     core: { latest: '1.1.0', versions: ['1.0.0', '1.1.0'], peers: {} }
-  } as const
-  const r = await check(dir, new AbortController().signal, async (n) => info[n as keyof typeof info], noOsv)
+  }
+  const r = await check(dir, new AbortController().signal, async (n) => info[n] ?? null, noOsv)
   const [addon, core] = r.deps
   assert.equal(addon.installed, '1.0.4')
   assert.equal(core.installed, '1.0.0')
@@ -93,4 +93,37 @@ test('checks every section and rewrites only plain ranges', async () => {
     { section: 'dependencies', name: 'c', version: '3.1.0' }
   ])
   assert.equal(await readFile(join(dir, 'package.json'), 'utf8'), text.replace('^1.2.3', '^1.4.0'))
+})
+
+test('Update with agent: nothing starts when every library is up to date', async () => {
+  const { mockHost, mountWorker } = await import('orca/testing')
+  const main = await import('./worker')
+  const dir = await mkdtemp(join(tmpdir(), 'vl-agent-'))
+  // A file: range is never looked up on npm, so the check is offline and finds nothing to update.
+  await writeFile(join(dir, 'package.json'), JSON.stringify({ dependencies: { local: 'file:../local' } }))
+  const calls: string[] = []
+  const host = mockHost({
+    results: {
+      'workspace.readContext': { workspaceId: 'w1', branch: 'main', displayName: 'app', terminals: [] },
+      'workspace.list': { workspaces: [{ id: 'w1', kind: 'worktree', name: 'app', path: dir, branch: 'main', hostId: 'local' }], truncated: false },
+      'agent.launch': () => (calls.push('launch'), { terminalId: 't1' })
+    }
+  })
+  const worker = await mountWorker(main, { host })
+  await assert.rejects(() => worker.request('deps.askAgent'), /up to date/)
+  await assert.rejects(() => worker.request('deps.agentPrompt'), /up to date/)
+  await worker.deactivate()
+  assert.deepEqual(calls, [])
+})
+
+test('types the prompt only once the agent is ready, never into a trust screen', async () => {
+  const { agentReady, deliverPrompt } = await import('./worker')
+  const READY = ['  Claude Code v2.1.328', '❯ Try "write a test"']
+  assert.equal(agentReady(['', '']), false)
+  assert.equal(agentReady(READY), true)
+  assert.equal(agentReady(['Do you trust the files in this folder?', '❯ 1. Yes, proceed']), false)
+  const screens = [[''], ['']]
+  const sent: string[] = []
+  assert.equal(await deliverPrompt(async () => screens.shift() ?? READY, async (t) => (sent.push(t), true), 'go', { everyMs: 1, wait: async () => {} }), true)
+  assert.deepEqual([sent, screens], [['go'], []])
 })
