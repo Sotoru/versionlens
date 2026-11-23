@@ -9,7 +9,6 @@ import {
   Heading,
   IconButton,
   Input,
-  on,
   plugin,
   read,
   Row,
@@ -125,16 +124,12 @@ async function openChangelog(d: Dep, to: string): Promise<void> {
 
 export function setup(ctx: PanelContext): void {
   void refresh()
-  // The first event replays the current workspace; refresh only when focus moves elsewhere.
-  let last: string | undefined | null = null
+  // The worker checks by itself when package.json changes, focus moves, or every hour.
   ctx.subscriptions.push(
-    on('workspace.changed', ({ context }) => {
-      const id = context?.workspaceId
-      if (last !== null && id !== last) {
-        set(pinned, {})
-        void refresh()
-      }
-      last = id
+    plugin.on('deps.updated', (r) => {
+      if (read(busy)) return
+      if (r.path !== read(report)?.path) set(pinned, {})
+      set(report, r)
     })
   )
 }

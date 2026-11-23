@@ -1,3 +1,4 @@
+import { watch, type FSWatcher } from 'node:fs'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -265,6 +266,47 @@ export async function deliverPrompt(
   return false
 }
 
+/** `↑ 5 · ⚠ 1`: updates available and installed versions with known vulnerabilities. */
+export function statusOf(r: Report) {
+  if (r.error) return { text: 'Version Lens', tone: 'neutral' as const, tooltip: r.error }
+  const outdated = r.deps.filter((d) => d.status === 'major' || d.status === 'minor' || d.status === 'patch')
+  const majors = outdated.filter((d) => d.status === 'major').length
+  const vulnerable = r.deps.filter((d) => d.installed && d.vulns[d.installed]?.length).length
+  return {
+    text: vulnerable ? `↑ ${outdated.length} · ⚠ ${vulnerable}` : `↑ ${outdated.length}`,
+    tone: vulnerable ? ('danger' as const) : outdated.length ? ('warning' as const) : ('success' as const),
+    tooltip: `Version Lens: ${outdated.length ? `${outdated.length} updates (${majors} major)` : 'every dependency is up to date'}${vulnerable ? `, ${vulnerable} installed with known vulnerabilities` : ''}. Press to check again.`
+  }
+}
+
+/** Calls `onChange` a second after package.json or a lockfile changes, outside node_modules. */
+export function follow(root: string, onChange: () => void, delayMs = 1000): () => void {
+  const files = /(^|[\\/])(package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb?)$/
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let watcher: FSWatcher | null = null
+  try {
+    watcher = watch(root, { recursive: true }, (_, name) => {
+      const n = name?.toString()
+      if (!n || !files.test(n) || /(^|[\\/])(node_modules|\.git)([\\/]|$)/.test(n)) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(onChange, delayMs)
+    })
+    watcher.on('error', () => watcher?.close())
+  } catch {
+    watcher = null
+  }
+  return () => {
+    if (timer) clearTimeout(timer)
+    watcher?.close()
+  }
+}
+
+// The running worker's watcher and timer, closed when Orca stops it.
+let stop = () => {}
+export function deactivate() {
+  stop()
+}
+
 export default function activate(orca: OrcaWorkerApi): void {
   // Cached for the worker's life so an update does not ask npm again; Refresh clears it.
   const cache = new Map<string, Promise<Info | null>>()
@@ -284,14 +326,49 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   async function run(signal: AbortSignal, before?: (dir: string) => Promise<void>): Promise<Report> {
     const ws = await workspace()
-    if (!('id' in ws)) return ws
+    if (!('id' in ws)) return publish(ws)
+    track(ws.path)
     try {
       await before?.(ws.path)
-      return await check(ws.path, signal, cached)
+      return publish(await check(ws.path, signal, cached))
     } catch (e) {
-      return { path: ws.path, deps: [], error: `package.json: ${(e as Error).message}` }
+      return publish({ path: ws.path, deps: [], error: `package.json: ${(e as Error).message}` })
     }
   }
+
+  async function publish(r: Report): Promise<Report> {
+    await orca.host.call('statusBar.update', { id: 'versionlens', visible: true, ...statusOf(r) }).catch(() => {})
+    return r
+  }
+
+  // Checks by itself on package.json or lockfile edits and once an hour, telling open panels.
+  let watching = ''
+  let unfollow = () => {}
+  let auto: AbortController | null = null
+  async function background(fresh = false) {
+    if (fresh) cache.clear()
+    auto?.abort()
+    const ctl = (auto = new AbortController())
+    const r = await run(ctl.signal).catch(() => null)
+    if (r && !ctl.signal.aborted) orca.panels.post('deps.updated', r)
+  }
+  function track(path: string) {
+    if (path === watching) return
+    unfollow()
+    watching = path
+    unfollow = follow(path, () => void background())
+    stop = () => (unfollow(), clearInterval(hourly), auto?.abort())
+  }
+  // New releases appear on npm without any file changing.
+  const hourly = setInterval(() => void background(true), 60 * 60_000)
+  stop = () => (clearInterval(hourly), auto?.abort())
+  orca.events.on('workspace.changed', () => void workspace().then((ws) => ('id' in ws && ws.path !== watching ? background() : undefined)).catch(() => {}))
+  orca.commands.register('versionlens.check', async () => {
+    cache.clear()
+    const r = await run(new AbortController().signal)
+    orca.panels.post('deps.updated', r)
+    return r.error ?? statusOf(r).tooltip
+  })
 
   orca.panels.handle('deps.check', async (input, { signal }) => {
     if (input?.fresh) cache.clear()

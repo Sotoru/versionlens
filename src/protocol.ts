@@ -40,6 +40,10 @@ export type Changelog = {
 }
 
 declare module 'orca' {
+  interface PluginPanelEvents {
+    /** A check the worker ran by itself: package.json changed, the workspace changed, or the hourly look at npm. */
+    'deps.updated': Report
+  }
   interface PluginRequests {
     /** Reads the focused workspace's package.json and looks up each dependency on npm. */
     'deps.check': { input: { fresh?: boolean }; output: Report }

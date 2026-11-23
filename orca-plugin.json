@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "versionlens",
   "name": "Version Lens",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "See newer npm versions for every package.json dependency, update them in place, read changelogs, and catch peer conflicts and known vulnerabilities.",
   "engines": {
     "orca": ">=1.4.259"
@@ -29,6 +29,27 @@
         "icon": "package",
         "entry": "src/panel.tsx",
         "ui": "components"
+      }
+    ],
+    "commands": [
+      {
+        "id": "versionlens.check",
+        "title": "Version Lens: Check Dependencies",
+        "when": "workspace"
+      }
+    ],
+    "events": [
+      {
+        "on": "workspace.changed"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "versionlens",
+        "text": "Version Lens",
+        "icon": "package",
+        "tooltip": "Version Lens: press to check this workspace's dependencies",
+        "command": "versionlens.check"
       }
     ]
   },

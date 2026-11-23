@@ -127,3 +127,31 @@ test('types the prompt only once the agent is ready, never into a trust screen',
   assert.equal(await deliverPrompt(async () => screens.shift() ?? READY, async (t) => (sent.push(t), true), 'go', { everyMs: 1, wait: async () => {} }), true)
   assert.deepEqual([sent, screens], [['go'], []])
 })
+
+test('the status bar counts updates and vulnerable installs', async () => {
+  const { statusOf } = await import('./worker')
+  const dep = (name: string, status: string, vulns = 0) =>
+    ({ name, section: 'dependencies', current: '^1.0.0', latest: '2.0.0', suggestions: {}, status, updatable: true, installed: '1.0.0', peers: {}, vulns: vulns ? { '1.0.0': [{ id: 'X', summary: '', severity: 'HIGH', url: '' }] } : {} }) as never
+  assert.deepEqual(statusOf({ path: '/p', deps: [dep('a', 'major', 1), dep('b', 'patch'), dep('c', 'latest')] }).text, '↑ 2 · ⚠ 1')
+  assert.equal(statusOf({ path: '/p', deps: [dep('a', 'major', 1)] }).tone, 'danger')
+  assert.deepEqual([statusOf({ path: '/p', deps: [dep('c', 'latest')] }).text, statusOf({ path: '/p', deps: [dep('c', 'latest')] }).tone], ['↑ 0', 'success'])
+  assert.equal(statusOf({ path: null, deps: [], error: 'No workspace is focused.' }).text, 'Version Lens')
+})
+
+test('checks again a second after package.json changes, not for other files', async () => {
+  const { follow } = await import('./worker')
+  const dir = await mkdtemp(join(tmpdir(), 'vl-follow-'))
+  await mkdir(join(dir, 'node_modules', 'x'), { recursive: true })
+  let runs = 0
+  const stop = follow(dir, () => runs++, 150)
+  await new Promise((r) => setTimeout(r, 100))
+  await writeFile(join(dir, 'node_modules', 'x', 'package.json'), '{}')
+  await writeFile(join(dir, 'README.md'), 'x')
+  await new Promise((r) => setTimeout(r, 400))
+  assert.equal(runs, 0)
+  await writeFile(join(dir, 'package.json'), '{}')
+  await writeFile(join(dir, 'package.json'), '{"name":"x"}')
+  await new Promise((r) => setTimeout(r, 500))
+  stop()
+  assert.equal(runs, 1)
+})

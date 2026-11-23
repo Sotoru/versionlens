@@ -15,6 +15,10 @@ workspace and shows which dependencies have newer versions on npm, inspired by
   or needs a peer nothing here provides.
 - **Known vulnerabilities** from [OSV.dev](https://osv.dev), in the installed and in the new
   version.
+- **Status bar**: `↑ 12` updates and `⚠ 1` vulnerable installs; press to check again.
+
+It checks again by itself when you switch workspace, a second after `package.json` or a lockfile
+changes, and once an hour for new releases on npm.
 
 ## Install
 
@@ -28,6 +32,10 @@ Orca asks you to approve it first. It needs:
   npm, GitHub and OSV.dev.
 - **`workspace:read`**: to find the focused workspace's folder.
 - **`workspace:write`**: only to open a changelog file in an editor tab.
+- **`agent:launch`**, **`terminal:read`**, **`terminal:send`**: only for "Update with agent". Orca
+  can drop a launch prompt before the agent is ready, so the plugin waits for the agent's input
+  box and types the prompt itself.
+- **`settings:own`**: which agent to start.
 
 ## What it sends where
 
